@@ -1,6 +1,7 @@
 #include <iostream>
 #include <list>
 #include <map>
+#include <numeric>
 #include <regex>
 #include <set>
 #include <string>
@@ -53,61 +54,48 @@ auto parse() -> map
     return ret;
 }
 
-auto explore(map const & valves, int time = 30, int flow = 0, name_t current = "AA", std::set<name_t> opened = {}, std::set<name_t> visited = {}) -> std::set<int>
+auto flow(map const & caves, std::set<name_t> const & opened) -> int
 {
-    //std::cout << "Exploring from " << current << " with time " << time << " and current flow " << flow << std::endl;
-    std::set<int> ret{flow};
-    if(time < 1)
-        return ret;
-
-    if(visited.contains(current))
-        return ret;
-    visited.insert(current);
-
-    auto found = valves.find(current);
-    if(found == valves.end())
-        return ret;
-
-    auto & next = found->second.next;
-
-    std::for_each(next.begin(), next.end(),[current, &valves, time, flow, &opened, &visited, &ret](auto dest)
+    return std::accumulate(opened.begin(), opened.end(), int{0}, [&caves](int total, auto name)
     {
-        auto these = explore(valves, time-1, flow, dest, opened, visited);
-        //std::cout << "Without opening " << current << " we found " << these.size() << " options" << std::endl;
-        ret.insert(these.begin(), these.end());
+        auto found = caves.find(name);
+        return total + found->second.rate;
     });
-    
-    if(!opened.contains(current))
+}
+
+auto explore(map const & caves, name_t loc = "AA", int time = 1, int pressure = 0, std::set<name_t> opened = {}) -> int
+{
+    auto current = caves.find(loc);
+    auto next = current->second.next;
+    int best = pressure;
+
+    if(time > 30)
     {
-        // Can choose to open this valve
-        --time; // It takes one minute to open the valve
-
-        flow += found->second.rate * time; // Add this valve's contribution to the flow
-
-        std::cout << "Opening valve " << current << " with remaining time " << time << " gives current flow " << flow << std::endl;
-
-        ret.insert(flow);
-
-        opened.insert(current); // We can't open it twice
-
-        std::for_each(next.begin(), next.end(),[current, &valves, time, flow, &opened, &visited, &ret](auto dest)
-        {
-            auto these = explore(valves, time-1, flow, dest, opened, visited);
-            //std::cout << "With opening " << current << " we found " << these.size() << " options" << std::endl;
-            ret.insert(these.begin(), these.end());
-        });
+        return best;
     }
 
-    //std::cout << "After exploring " << current << " we found " << ret.size() << " options" << std::endl;
-    return ret;
-} 
+    for(int i = 0; i < 2; ++i)
+    {
+        pressure += flow(caves, opened);
+
+        // First time around not open
+        std::for_each(next.begin(), next.end(), [&best, caves, time, &pressure, &opened](auto n)
+        {
+            best = std::max(best, explore(caves, n, time + 1, pressure, opened));
+        });
+        
+        // Second time around is open
+        opened.insert(loc);
+        ++time;
+    }
+
+    return best;
+}
 
 int main()
 {
     auto valves = parse();
-    auto possible = explore(valves);
-
-    std::cout << *possible.rbegin() << std::endl;
+    std::cout << explore(valves) << std::endl;
 
     return 0;
 }
