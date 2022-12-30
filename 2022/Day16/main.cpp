@@ -6,7 +6,9 @@
 #include <set>
 #include <string>
 
-using name_t = std::string;
+using name_map = std::map<std::string, std::size_t>;
+
+using name_t = std::size_t;
 using neighbour_t = std::pair<int, name_t>;
 
 struct node_t
@@ -17,13 +19,17 @@ struct node_t
 
 using map = std::map<name_t, node_t>;
 
-auto destinations(std::string csl) -> std::list<neighbour_t>
+auto destinations(std::string csl, name_map & names) -> std::list<neighbour_t>
 {
     std::list<neighbour_t> ret;
 
     while(csl.length() >= 2)
     {
-        ret.push_back(std::make_pair(1, csl.substr(0, 2)));
+        auto name = csl.substr(0, 2);
+        if(!names.contains(name))
+            names[name] = names.size();
+        auto id = names[name];
+        ret.push_back(std::make_pair(1, id));
         csl.erase(0, 4);
     }
 
@@ -38,6 +44,8 @@ auto parse() -> map
     std::regex regex{"^Valve ([A-Z][A-Z]) has flow rate=([0-9]+); tunnels? leads? to valves? (.*)$"};
     std::smatch match;
 
+    name_map names;
+
     while(std::getline(std::cin, line))
     {
         if(!std::regex_match(line, match, regex))
@@ -46,10 +54,15 @@ auto parse() -> map
             throw 5;
         }
 
-        name_t name = match[1];
-        node_t node{stoi(match[2]), destinations(match[3])}; 
+        std::string name = match[1];
 
-        ret.insert(std::make_pair(name, node));
+        if(!names.contains(name))
+            names[name] = names.size();
+
+        name_t id = names[name];
+        node_t node{stoi(match[2]), destinations(match[3], names)}; 
+
+        ret.insert(std::make_pair(id, node));
     }
 
     return ret;
@@ -168,7 +181,7 @@ auto Dijkstra(map const & graph, name_t source) -> distances
 // Figure out the distances between each pair of interesting nodes
 auto reduce(map const & graph) -> map
 {
-    std::set<name_t> interesting{"AA"}; // AA is always interesting as it's the start node
+    std::set<name_t> interesting{0}; // AA is always interesting as it's the start node
 
     // Filter the list of nodes to those with non-zero flow rate
     std::for_each(graph.begin(), graph.end(), [&interesting](auto entry)
@@ -218,22 +231,62 @@ struct state_t
             return remaining_time < rhs.remaining_time;
         if(location != rhs.location)
             return location < rhs.location;
-        return opened < rhs.opened;
+
+        if(elephant_location != rhs.elephant_location)
+            return elephant_location < rhs.elephant_location;
+        if(elephant_wait != rhs.elephant_wait)
+            return elephant_wait < rhs.elephant_wait;
+        return opened.to_ullong() < rhs.opened.to_ullong();
+    }
+
+    void print() const
+    {
+        std::cout << remaining_time << " mins remaining, primary location " << location << ", elephant will be at " << elephant_location << " in " << elephant_wait << std::endl;
+    }
+
+    // Reduce the remaining time, which may switch focus between actor (human and elephant)
+    // Returns true if context switched
+    auto reduce_time(int mins) -> bool
+    {
+        if(mins > elephant_wait)
+        {
+            //std::cout << "Reducing remaining time by " << mins << " switches context to elephant, which only had to wait " << elephant_wait << std::endl;
+            //print();
+            remaining_time -= elephant_wait;
+            elephant_wait = mins - elephant_wait;
+
+            // To ensure that comparion operation finds as many matches as possible when the state is really the same, keep the context sorted when both actors are ready to go
+            if(elephant_wait > 0 || location > elephant_location)
+            {
+                std::swap(location, elephant_location);
+            }
+            return true;
+            //print();
+        }
+        else
+        {
+            remaining_time -= mins;
+            elephant_wait -= mins;
+            return false;
+        }
     }
 
     int remaining_time;
     name_t location;
-    std::set<name_t> opened;
+    name_t elephant_location;
+    int elephant_wait;
+    std::bitset<64> opened;
 };
 
-static const state_t initial_state{30, "AA", std::set<name_t>{}};
+static const state_t initial_state{30, 0, 0, 30, 0};
+static const state_t with_elephant{26, 0, 0, 0, 0};
 
 using state_history = std::map<state_t, int>;
 
-auto open(map const & map, state_history & history, int released_flow, state_t state) -> int;
-auto explore(map const & map, state_history & history, int released_flow, state_t state) -> int;
+auto open(map const & map, state_history & history, state_t state, int released_flow) -> int;
+auto explore(map const & map, state_history & history, state_t state, int released_flow) -> int;
 
-auto max(map const & map, state_history & history, int released_flow = 0, state_t state = initial_state) -> int
+auto max(map const & map, state_history & history, state_t state = initial_state, int released_flow = 0) -> int
 {
     // If our state matches a previous call to max, we already know the answer!
     auto found = history.find(state);
@@ -244,13 +297,14 @@ auto max(map const & map, state_history & history, int released_flow = 0, state_
         return released_flow + found->second;
     }
 
-    if(state.remaining_time > 27)
+    if(state.remaining_time > 20)
         std::cout << "Finding max from " << state.location << " with " << state.remaining_time << " minutes remaining. We've already released " << released_flow << std::endl;
+    
     // Model opening this valve
-    auto best = open(map, history, released_flow, state);
+    auto best = open(map, history, state, released_flow);
 
     // Also model the exploration from this node without opening the valve
-    best = std::max(best, explore(map, history, released_flow, state));
+    best = std::max(best, explore(map, history, state, released_flow));
 
     // Remember this answer, might come in handy
     auto released = best - released_flow;
@@ -264,7 +318,7 @@ auto max(map const & map, state_history & history, int released_flow = 0, state_
     return best;
 }
 
-auto explore(map const & map, state_history & history, int released_flow, state_t current_state) -> int
+auto explore(map const & map, state_history & history, state_t current_state, int released_flow) -> int
 {
     // Try each path from current location
     auto found = map.find(current_state.location);
@@ -277,9 +331,10 @@ auto explore(map const & map, state_history & history, int released_flow, state_
         // Walk to this destination, if possible
         if(state.remaining_time > destination.first)
         {
-            state.remaining_time -= destination.first;
             state.location = destination.second;
-            auto mine = max(map, history, released_flow, state);
+            state.reduce_time(destination.first);
+            
+            auto mine = max(map, history, state, released_flow);
             //std::cout << "Returning max of " << best << "," << mine << std::endl;
             return std::max(best, mine);
         }
@@ -288,7 +343,7 @@ auto explore(map const & map, state_history & history, int released_flow, state_
     });
 }
 
-auto open(map const & map, state_history & history, int released_flow, state_t state) -> int
+auto open(map const & map, state_history & history, state_t state, int released_flow) -> int
 {
     if(state.remaining_time <= 1)
     {
@@ -297,14 +352,15 @@ auto open(map const & map, state_history & history, int released_flow, state_t s
     }
     auto found = map.find(state.location);
 
-    if(state.opened.insert(state.location).second)
+    if(!state.opened.test(state.location))
     {
-        --state.remaining_time;
-        auto extra = state.remaining_time * found->second.rate;
+        state.opened.set(state.location);
+        auto extra = (state.remaining_time - 1) * found->second.rate;
+        state.reduce_time(1);
         //std::cout << "Opened valve in " << state.location << " with " << state.remaining_time << " minutes remeaining, which releases " << extra << " extra flow" << std::endl;
         released_flow += extra;
         //std::cout << released_flow << std::endl;
-        auto ret = explore(map, history, released_flow, state);
+        auto ret = max(map, history, state, released_flow);
         //std::cout << ret << std::endl;
         return ret;
     }
@@ -314,18 +370,27 @@ auto open(map const & map, state_history & history, int released_flow, state_t s
 
 auto part1(map const & map) -> std::size_t
 {
-    auto reduced = reduce(map);
-
     state_history history;
 
-    return max(reduced, history);//, 0, short_state);
+    return max(map, history);//, 0, short_state);
+}
+
+auto part2(map const & map) -> std::size_t
+{
+    state_history history;
+
+    return max(map, history, with_elephant);
 }
 
 int main()
 {
     auto valves = parse();
 
-    std::cout << part1(valves) << std::endl;
+    auto reduced = reduce(valves);
+
+    //std::cout << part1(reduced) << std::endl;
+
+    std::cout << part2(reduced) << std::endl;
 
     return 0;
 }
