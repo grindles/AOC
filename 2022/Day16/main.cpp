@@ -14,14 +14,14 @@ using neighbour_t = std::pair<int, name_t>;
 struct node_t
 {
     int rate;
-    std::list<neighbour_t> next;
+    std::vector<neighbour_t> next;
 };
 
-using map = std::map<name_t, node_t>;
+using map = std::vector<node_t>;
 
-auto destinations(std::string csl, name_map & names) -> std::list<neighbour_t>
+auto destinations(std::string csl, name_map & names) -> std::vector<neighbour_t>
 {
-    std::list<neighbour_t> ret;
+    std::vector<neighbour_t> ret;
 
     while(csl.length() >= 2)
     {
@@ -60,9 +60,14 @@ auto parse() -> map
             names[name] = names.size();
 
         name_t id = names[name];
-        node_t node{stoi(match[2]), destinations(match[3], names)}; 
+        node_t node{stoi(match[2]), destinations(match[3], names)};
 
-        ret.insert(std::make_pair(id, node));
+        if(ret.size() <= id)
+        {
+            ret.resize(id+1);
+        }
+
+        ret[id] = node;
     }
 
     return ret;
@@ -73,20 +78,16 @@ auto shortest(name_t from, name_t to, map const & map) -> int
     if(from == to)
         return 0;
     //std::cout << "Finding shortest path between " << from << " and " << to << ": ";
-    auto from_iter = map.find(from);
-    if(from_iter == map.end())
-    {
-        throw 5;
-    }
+    auto & source = map.at(from);
 
     // BFS from source until matching destination is reached
     std::multimap<int, name_t> queue;
-    auto & froms = from_iter->second.next;
+    auto & dests = source.next;
 
-    std::for_each(froms.begin(), froms.end(), [&queue](auto f)
+    std::for_each(dests.begin(), dests.end(), [&queue](auto d)
     {
         //std::cout << "Initial queue includes " << f.second << std::endl;
-        queue.insert(f);
+        queue.insert(d);
     });
 
     while(!queue.empty())
@@ -102,12 +103,8 @@ auto shortest(name_t from, name_t to, map const & map) -> int
             return dist;
         }
 
-        auto extra_iter = map.find(next);
-        if(extra_iter == map.end())
-        {
-            throw 6;
-        }
-        auto extra_hops = extra_iter->second.next;
+        auto & source = map.at(next);
+        auto extra_hops = source.next;
 
         std::for_each(extra_hops.begin(), extra_hops.end(), [&queue, dist](auto hop)
         {
@@ -129,8 +126,8 @@ auto Dijkstra(map const & graph, name_t source) -> distances
     std::set<name_t> visited{};
     std::multimap<int, name_t> q{};
 
-    auto node = graph.find(source);
-    auto & neighbours = node->second.next;
+    auto & node = graph.at(source);
+    auto & neighbours = node.next;
 
     std::for_each(neighbours.begin(), neighbours.end(), [&q](auto neighbour)
     {
@@ -156,14 +153,9 @@ auto Dijkstra(map const & graph, name_t source) -> distances
             }
             
             // Now queue up all it's neighbours
-            auto node = graph.find(name);
+            auto & node = graph.at(name);
 
-            if(node == graph.end())
-            {
-                throw 5;
-            }
-
-            auto & neighbours = node->second.next;
+            auto & neighbours = node.next;
 
             std::for_each(neighbours.begin(), neighbours.end(), [&q, distance](auto neighbour)
             {
@@ -184,26 +176,28 @@ auto reduce(map const & graph) -> map
     std::set<name_t> interesting{0}; // AA is always interesting as it's the start node
 
     // Filter the list of nodes to those with non-zero flow rate
-    std::for_each(graph.begin(), graph.end(), [&interesting](auto entry)
+    for(std::size_t id = 0; id < graph.size(); ++id)
     {
-        if(entry.second.rate > 0)
+        if(graph[id].rate > 0)
         {
-            interesting.insert(entry.first);
+            interesting.insert(id);
         }
-    });
+    }
 
     std::cout << "Found " << interesting.size() << " nodes of interest out of " << graph.size() << std::endl;
 
     // For each interesting node, find it's shortest path to neighbours
     map reduced;
 
+    reduced.resize(graph.size());
+
     // Create mapping between each pair of points
     std::for_each(interesting.begin(), interesting.end(), [interesting, graph, &reduced](auto source)
     {
-        auto rate = graph.find(source)->second.rate;
+        reduced.at(source).rate = graph.at(source).rate;
+        
         // New node
-        auto iter = reduced.insert(std::make_pair(source, node_t{rate, std::list<neighbour_t>{}})).first;
-        std::list<neighbour_t> & next = iter->second.next;
+        auto & next = reduced.at(source).next;
 
         auto neighbours = Dijkstra(graph, source);
 
@@ -321,8 +315,7 @@ auto max(map const & map, state_history & history, state_t state = initial_state
 auto explore(map const & map, state_history & history, state_t current_state, int released_flow) -> int
 {
     // Try each path from current location
-    auto found = map.find(current_state.location);
-    auto & next = found->second.next;
+    auto & next = map.at(current_state.location).next;
 
     // Use accumulate, but actually just for max
     return std::accumulate(next.begin(), next.end(), released_flow, [map, &history, released_flow, current_state](int best, auto destination)
@@ -350,12 +343,13 @@ auto open(map const & map, state_history & history, state_t state, int released_
         // No point opening this valve
         return released_flow;
     }
-    auto found = map.find(state.location);
+
+    auto rate = map.at(state.location).rate;
 
     if(!state.opened.test(state.location))
     {
         state.opened.set(state.location);
-        auto extra = (state.remaining_time - 1) * found->second.rate;
+        auto extra = (state.remaining_time - 1) * rate;
         state.reduce_time(1);
         //std::cout << "Opened valve in " << state.location << " with " << state.remaining_time << " minutes remeaining, which releases " << extra << " extra flow" << std::endl;
         released_flow += extra;
@@ -388,9 +382,9 @@ int main()
 
     auto reduced = reduce(valves);
 
-    //std::cout << part1(reduced) << std::endl;
+    std::cout << part1(reduced) << std::endl;
 
-    std::cout << part2(reduced) << std::endl;
+    //std::cout << part2(reduced) << std::endl;
 
     return 0;
 }
