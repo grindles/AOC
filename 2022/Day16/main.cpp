@@ -45,6 +45,7 @@ auto parse() -> map
     std::smatch match;
 
     name_map names;
+    names["AA"] = 0;
 
     while(std::getline(std::cin, line))
     {
@@ -384,7 +385,7 @@ int main()
 
     std::cout << part1(reduced) << std::endl;
 
-    //std::cout << part2(reduced) << std::endl;
+    std::cout << part2(reduced) << std::endl;
 
     return 0;
 }
